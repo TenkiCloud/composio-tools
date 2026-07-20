@@ -61,6 +61,8 @@ function fakeSession(overrides: Partial<Session> = {}): Session {
     tags: [],
     exec: vi.fn().mockResolvedValue(fakeExecResult()),
     close: vi.fn().mockResolvedValue(undefined),
+    closeIfOpen: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as Session;
 }
@@ -82,7 +84,7 @@ function fakeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 
 interface MockClient {
   whoAmI: ReturnType<typeof vi.fn>;
-  createAndWait: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   list: ReturnType<typeof vi.fn>;
   createSnapshotAndWait: ReturnType<typeof vi.fn>;
@@ -91,7 +93,7 @@ interface MockClient {
 function mockClient(overrides: Partial<MockClient> = {}): MockClient {
   const client: MockClient = {
     whoAmI: vi.fn().mockResolvedValue(identity),
-    createAndWait: vi.fn().mockResolvedValue(fakeSession()),
+    create: vi.fn().mockResolvedValue(fakeSession()),
     get: vi.fn().mockResolvedValue(fakeSession()),
     list: vi.fn().mockResolvedValue([fakeSession()]),
     createSnapshotAndWait: vi.fn().mockResolvedValue(fakeSnapshot()),
@@ -159,7 +161,7 @@ describe('CREATE_SANDBOX', () => {
     expect(result.success).toBe(true);
     expect(result.sessionId).toBe('sess-1');
     expect(result.state).toBe('RUNNING');
-    expect(client.createAndWait).toHaveBeenCalledWith(
+    expect(client.create).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: 'ws-1', projectId: 'proj-1', name: 'box' })
     );
   });
@@ -181,7 +183,7 @@ describe('CREATE_SANDBOX', () => {
     await execute(toolkit, 'CREATE_SANDBOX', {});
 
     expect(client.whoAmI).not.toHaveBeenCalled();
-    expect(client.createAndWait).toHaveBeenCalledWith(
+    expect(client.create).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: 'ws-x', projectId: 'proj-x' })
     );
   });
@@ -194,7 +196,7 @@ describe('CREATE_SANDBOX', () => {
     await execute(tenkiToolkit(), 'CREATE_SANDBOX', {});
 
     expect(client.whoAmI).not.toHaveBeenCalled();
-    expect(client.createAndWait).toHaveBeenCalledWith(
+    expect(client.create).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: 'ws-env', projectId: 'proj-env' })
     );
   });
@@ -209,7 +211,7 @@ describe('CREATE_SANDBOX', () => {
       ],
     });
 
-    expect(client.createAndWait).toHaveBeenCalledWith(
+    expect(client.create).toHaveBeenCalledWith(
       expect.objectContaining({ env: { NODE_ENV: 'test', FOO: 'bar' } })
     );
   });
@@ -220,7 +222,7 @@ describe('CREATE_SANDBOX', () => {
 
     await execute(toolkit, 'CREATE_SANDBOX', { cpuCores: 8 });
 
-    expect(client.createAndWait).toHaveBeenCalledWith(
+    expect(client.create).toHaveBeenCalledWith(
       expect.objectContaining({ cpuCores: 8, allowOutbound: true })
     );
   });
@@ -235,6 +237,51 @@ describe('CREATE_SANDBOX', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatchObject({ type: 'Error' });
     expect((result.error as { message: string }).message).toContain('TENKI_WORKSPACE_ID');
+  });
+
+  it('boots without blocking readiness and applies the max-duration backstop by default', async () => {
+    const client = mockClient();
+
+    await execute(tenkiToolkit(), 'CREATE_SANDBOX', {});
+
+    expect(client.create).toHaveBeenCalledWith(
+      expect.objectContaining({ waitReady: false, maxDurationMs: 30 * 60_000 })
+    );
+  });
+
+  it('lets maxDurationMinutes input override the backstop', async () => {
+    const client = mockClient();
+
+    await execute(tenkiToolkit(), 'CREATE_SANDBOX', { maxDurationMinutes: 5 });
+
+    expect(client.create).toHaveBeenCalledWith(
+      expect.objectContaining({ maxDurationMs: 5 * 60_000 })
+    );
+  });
+
+  it('is failure-atomic: terminates the sandbox when boot ends in a terminal state', async () => {
+    const session = fakeSession({ state: 'CREATING' });
+    (session.refresh as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (session as { state: string }).state = 'TERMINATED';
+    });
+    mockClient({ create: vi.fn().mockResolvedValue(session) });
+
+    const result = await execute(tenkiToolkit(), 'CREATE_SANDBOX', {});
+
+    expect(result.success).toBe(false);
+    expect((result.error as { message: string }).message).toContain('terminal state');
+    expect(session.closeIfOpen).toHaveBeenCalled();
+  });
+
+  it('is failure-atomic: terminates the sandbox when readiness times out', async () => {
+    const session = fakeSession({ state: 'CREATING' });
+    mockClient({ create: vi.fn().mockResolvedValue(session) });
+
+    const result = await execute(tenkiToolkit({ bootTimeoutMs: 1 }), 'CREATE_SANDBOX', {});
+
+    expect(result.success).toBe(false);
+    expect((result.error as { message: string }).message).toContain('not ready after');
+    expect(session.closeIfOpen).toHaveBeenCalled();
   });
 });
 

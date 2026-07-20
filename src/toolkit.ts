@@ -25,6 +25,7 @@ import {
   SandboxError,
   SessionNotFoundError,
   SessionTerminatedError,
+  isReady,
   isTerminal,
   stdoutText,
   stderrText,
@@ -45,6 +46,8 @@ export interface TenkiToolkitOptions {
   projectId?: string;
   /** When true, expose the tools in session.tools() without the agent having to search first. */
   preload?: boolean;
+  /** Budget for sandbox creation + readiness in CREATE_SANDBOX. A boot that exceeds it is terminated, not leaked. Default 120s. */
+  bootTimeoutMs?: number;
   /** Default sandbox specs applied to CREATE_SANDBOX when the agent omits them. */
   defaults?: {
     cpuCores?: number;
@@ -52,6 +55,8 @@ export interface TenkiToolkitOptions {
     diskSizeGb?: number;
     allowOutbound?: boolean;
     image?: string;
+    /** Hard backstop: the microVM self-terminates after this duration even if the host process crashes before TERMINATE_SANDBOX runs. Default 30 minutes. */
+    maxDurationMs?: number;
   };
 }
 
@@ -69,6 +74,33 @@ const MAX_STDERR_CHARS = 4_000;
 
 const DEFAULT_EXEC_TIMEOUT_SECONDS = 30;
 const MAX_EXEC_TIMEOUT_SECONDS = 600;
+
+/** Creation + readiness budget for CREATE_SANDBOX. */
+const DEFAULT_BOOT_TIMEOUT_MS = 120_000;
+/** Host-crash backstop: sandboxes self-terminate after this unless overridden. */
+const DEFAULT_MAX_DURATION_MS = 30 * 60_000;
+const READY_POLL_INTERVAL_MS = 500;
+
+/**
+ * Poll until the session accepts commands, using unary calls only.
+ * (`session.waitReady()` uses a server-streaming RPC that some runtimes —
+ * e.g. Bun's node:http2 — close prematurely; polling `refresh()` is
+ * runtime-agnostic.)
+ */
+async function waitUntilReady(session: Session, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await session.refresh();
+    if (isReady(session.state)) return;
+    if (isTerminal(session.state)) {
+      throw new Error(`Sandbox entered terminal state ${session.state} while booting.`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Sandbox not ready after ${timeoutMs}ms (state: ${session.state}).`);
+    }
+    await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
+  }
+}
 
 function describeError(error: unknown): ToolError {
   if (error instanceof SandboxError || error instanceof Error) {
@@ -187,7 +219,8 @@ export function tenkiToolkit(options: TenkiToolkitOptions = {}): CustomToolkit {
     description:
       'Create a fresh, isolated Linux microVM (Tenki sandbox) and wait until it is ready to accept commands (~2-4s). ' +
       'Use this before EXEC_COMMAND when you need a safe environment to run code, install packages, or test commands. ' +
-      'Returns the sessionId required by all other TENKI tools. Outbound internet access is controlled by allowOutbound (workspace defaults apply when omitted) — check outboundNetworking in the response.',
+      'Returns the sessionId required by all other TENKI tools. Outbound internet access is controlled by allowOutbound (workspace defaults apply when omitted) — check outboundNetworking in the response. ' +
+      'Sandboxes self-terminate after maxDurationMinutes (default 30) as a safety backstop.',
     inputParams: z.object({
       name: z.string().max(100).optional().describe('Human-readable sandbox name.'),
       cpuCores: z.number().int().min(1).max(16).optional().describe('vCPU count. Default 2.'),
@@ -222,14 +255,28 @@ export function tenkiToolkit(options: TenkiToolkitOptions = {}): CustomToolkit {
         )
         .optional()
         .describe('Environment variables to set inside the sandbox.'),
+      maxDurationMinutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(1440)
+        .optional()
+        .describe(
+          'Hard lifetime limit in minutes; the sandbox self-terminates after this even if never explicitly terminated. Default 30.'
+        ),
     }),
     execute: async input =>
       run(async () => {
         const { workspaceId, projectId } = await resolveTarget();
         const startedAt = Date.now();
-        const session = await getClient().createAndWait({
+        // Failure-atomic boot: take the session handle *before* waiting for
+        // readiness, so a failed or timed-out boot is terminated instead of
+        // leaking a running microVM. maxDurationMs is the backstop for the
+        // host-crash/SIGKILL case, where no cleanup code runs at all.
+        const session = await getClient().create({
           workspaceId,
           projectId,
+          maxDurationMs: DEFAULT_MAX_DURATION_MS,
           ...(options.defaults ?? {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.cpuCores !== undefined ? { cpuCores: input.cpuCores } : {}),
@@ -240,7 +287,18 @@ export function tenkiToolkit(options: TenkiToolkitOptions = {}): CustomToolkit {
           ...(input.env !== undefined
             ? { env: Object.fromEntries(input.env.map(e => [e.name, e.value])) }
             : {}),
+          ...(input.maxDurationMinutes !== undefined
+            ? { maxDurationMs: input.maxDurationMinutes * 60_000 }
+            : {}),
+          waitReady: false,
         });
+        try {
+          await waitUntilReady(session, options.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS);
+        } catch (error) {
+          // Best-effort cleanup; never mask the original boot error.
+          await session.closeIfOpen().catch(() => {});
+          throw error;
+        }
         return { ...sessionDetail(session), bootTimeMs: Date.now() - startedAt };
       }),
   });

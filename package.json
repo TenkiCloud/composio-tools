@@ -38,6 +38,14 @@
     "custom-toolkit"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlexanderArmua/composio-tools.git"
+  },
+  "homepage": "https://github.com/AlexanderArmua/composio-tools#readme",
+  "bugs": {
+    "url": "https://github.com/AlexanderArmua/composio-tools/issues"
+  },
   "engines": {
     "node": ">=18"
   },

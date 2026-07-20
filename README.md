@@ -45,10 +45,12 @@ tenkiToolkit({
   workspaceId: '…',             // default: TENKI_WORKSPACE_ID env var, else first visible workspace
   projectId: '…',               // default: TENKI_PROJECT_ID env var, else first project in workspace
   preload: true,                // expose tools in session.tools() without searching first
+  bootTimeoutMs: 120_000,       // creation + readiness budget; failed boots are terminated, not leaked
   defaults: {                   // applied to CREATE_SANDBOX when the agent omits them
     cpuCores: 4,
     memoryMb: 8192,
     allowOutbound: true,
+    maxDurationMs: 30 * 60_000, // hard backstop: VM self-terminates even if the host crashes
   },
 });
 ```
@@ -57,7 +59,7 @@ tenkiToolkit({
 
 | Tool | Input | Returns |
 |------|-------|---------|
-| `LOCAL_TENKI_CREATE_SANDBOX` | `name?`, `cpuCores?`, `memoryMb?`, `allowOutbound?`, `image?`, `snapshotId?`, `env?` (array of `{name, value}`) | `sessionId`, specs, state, `bootTimeMs` |
+| `LOCAL_TENKI_CREATE_SANDBOX` | `name?`, `cpuCores?`, `memoryMb?`, `allowOutbound?`, `image?`, `snapshotId?`, `env?` (array of `{name, value}`), `maxDurationMinutes?` (default 30) | `sessionId`, specs, state, `bootTimeMs` |
 | `LOCAL_TENKI_EXEC_COMMAND` | `sessionId`, `command`, `timeoutSeconds?` (default 30, max 600) | `exitCode`, `stdout`, `stderr`, `durationMs` (output truncated ~12KB/4KB for LLM context) |
 | `LOCAL_TENKI_LIST_SANDBOXES` | `state?` (filter) | `count`, `sandboxes[]` with id/name/state/specs |
 | `LOCAL_TENKI_GET_SANDBOX` | `sessionId` | full detail incl. state, networking, expiry |
@@ -65,6 +67,8 @@ tenkiToolkit({
 | `LOCAL_TENKI_TERMINATE_SANDBOX` | `sessionId` | idempotent; `alreadyTerminated` flag |
 
 Behavior notes: every tool returns structured JSON and never throws — SDK errors come back as `{ success: false, error: { type, message } }` so the agent can react. `EXEC_COMMAND` requires an existing `sessionId` (no implicit sandbox creation). Outbound internet is controlled by `allowOutbound`; when omitted, your Tenki **workspace defaults** apply — check `outboundNetworking` in the `CREATE_SANDBOX` response.
+
+Lifecycle guarantees: `CREATE_SANDBOX` is **failure-atomic** — the session handle is held before waiting for readiness, so a boot that fails or exceeds `bootTimeoutMs` is terminated, never leaked. Every sandbox gets a **max-duration backstop** (default 30 min, override via `maxDurationMinutes` or `defaults.maxDurationMs`) so microVMs self-terminate even if the host process crashes before calling `TERMINATE_SANDBOX`. Readiness is detected by polling unary `refresh()` rather than the streaming `waitReady()` RPC, which some runtimes (e.g. Bun's `node:http2`) close prematurely.
 
 ## Security
 
