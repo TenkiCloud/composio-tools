@@ -1,0 +1,111 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run checks and package publish dry-run without publishing
+        type: boolean
+        default: true
+      skip_publish:
+        description: Tag only — never publish to the registry (safe tag test / backfill)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: tenki-standard-small-2c-4g
+    environment: npm-publish
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.13.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish if version is new
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          SKIP_PUBLISH: ${{ inputs.skip_publish }}
+        run: |
+          set -euo pipefail
+
+          NAME=$(node -p 'require("./package.json").name')
+          VERSION=$(node -p 'require("./package.json").version')
+
+          PUBLISHED=false
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            PUBLISHED=true
+          fi
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            npm pack --dry-run
+            if [ "${PUBLISHED}" = "true" ]; then
+              echo "${NAME}@${VERSION} already published, skipping publish dry-run"
+              exit 0
+            fi
+            npm publish --access public --dry-run
+            exit 0
+          fi
+
+          # Tag-only mode: exercise the Tag release step without ever touching
+          # the registry, for any version regardless of publish state.
+          if [ "${SKIP_PUBLISH}" = "true" ]; then
+            echo "skip_publish=true, not publishing ${NAME}@${VERSION}"
+            exit 0
+          fi
+
+          if [ "${PUBLISHED}" = "true" ]; then
+            echo "${NAME}@${VERSION} already published, skipping"
+            exit 0
+          fi
+
+          npm publish --access public
+
+      - name: Tag release
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+
+          # Tag the exact published commit, at publish time. Immutable: only
+          # push when the tag is new (backfills a missing tag on re-run).
+          VERSION=$(node -p 'require("./package.json").version')
+          tag="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${tag}" | awk '{print $2}' | grep -qxF "refs/tags/${tag}"; then
+            echo "tag ${tag} already exists, skipping"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "${tag}"
+          # Tolerate a concurrent run that pushed the same tag first.
+          git push origin "refs/tags/${tag}" 2>/dev/null || git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1
