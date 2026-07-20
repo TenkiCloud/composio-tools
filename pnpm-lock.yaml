@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@tenkicloud/sandbox':
-        specifier: ^0.3.6
-        version: 0.3.6
+        specifier: ^0.4.0
+        version: 0.4.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -690,8 +690,8 @@ packages:
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
-  '@tenkicloud/sandbox@0.3.6':
-    resolution: {integrity: sha512-nCjCStmVUj5OG2Ek5aFMZnNI2UAw2tJb3enZobf1hFcoV7h9QVCYuKrpsf11SWcVVh7P39T+vZq+rlJkcyB6vQ==}
+  '@tenkicloud/sandbox@0.4.0':
+    resolution: {integrity: sha512-p9GiQutfqEhEEAQlEOph/wuP2Vk0kDof4GjhIvnV96TbvzoqPFp1pD6iEjUcJMri6sJsEXBGf0Grsyl+X52GiA==}
     engines: {node: '>=18'}
 
   '@types/estree@1.0.9':
@@ -1523,7 +1523,7 @@ snapshots:
 
   '@stablelib/base64@1.0.1': {}
 
-  '@tenkicloud/sandbox@0.3.6':
+  '@tenkicloud/sandbox@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.1
       '@connectrpc/connect': 2.1.2(@bufbuild/protobuf@2.12.1)
