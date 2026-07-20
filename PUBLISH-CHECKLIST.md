@@ -5,7 +5,7 @@ Status: code complete and live-validated (unit tests 24/24, `pnpm smoke` 11/11 s
 ## 1. Decisions (need sign-off from the Tenki team)
 
 - [ ] **Package name.** `@tenkicloud/composio-tools` (matches the `@tenkicloud/sandbox` scope; recommended). Alternatives considered: `@tenkicloud/composio` (too broad), `composio-tenki` (unscoped, follows `langchain-tenki` precedent but loses the org scope).
-- [ ] **GitHub org.** TenkiCloud vs LuxorLabs. Recommendation: same org that hosts `langchain-tenki`, repo name `composio-tools` (or `tenki-composio-tools` if the org mixes products).
+- [x] **GitHub org.** Decided: `TenkiCloud` (github.com/TenkiCloud — Tenki's official org). Repo transfers from `AlexanderArmua/composio-tools`.
 - [ ] **License holder line.** `LICENSE` currently says "Luxor Technology Corporation (Tenki Cloud)" — confirm or correct the legal entity.
 
 ## 2. Repo setup

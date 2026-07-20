@@ -40,11 +40,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AlexanderArmua/composio-tools.git"
+    "url": "git+https://github.com/TenkiCloud/composio-tools.git"
   },
-  "homepage": "https://github.com/AlexanderArmua/composio-tools#readme",
+  "homepage": "https://github.com/TenkiCloud/composio-tools#readme",
   "bugs": {
-    "url": "https://github.com/AlexanderArmua/composio-tools/issues"
+    "url": "https://github.com/TenkiCloud/composio-tools/issues"
   },
   "engines": {
     "node": ">=18"
